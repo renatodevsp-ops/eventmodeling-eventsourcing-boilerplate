@@ -38,7 +38,7 @@ func main() {
 	eventBus := bus.NewEventBus(pool, 3*time.Second)
 	defer eventBus.Close()
 
-	projector := listwallets.NewProjector()
+	projector := listwallets.NewProjector(pool)
 	if err := eventBus.Subscribe(ctx, "wallet-list-projector", projector.EventHandlers()); err != nil {
 		log.Fatal(err)
 	}

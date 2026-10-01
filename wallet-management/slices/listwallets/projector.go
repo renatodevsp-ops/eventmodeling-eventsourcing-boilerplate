@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/events"
 	"github.com/terraskye/eventsourcing"
 )
@@ -17,31 +18,42 @@ type Wallet struct {
 type Projector struct {
 	mu      sync.RWMutex
 	wallets map[string]*Wallet
+	db      *pgxpool.Pool
 }
 
-func NewProjector() *Projector {
-	return &Projector{wallets: make(map[string]*Wallet)}
+func NewProjector(db *pgxpool.Pool) *Projector {
+	return &Projector{wallets: make(map[string]*Wallet), db: db}
 }
 
 func (p *Projector) All() []Wallet {
-
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	result := make([]Wallet, 0, len(p.wallets))
-	for _, t := range p.wallets {
-		result = append(result, *t)
+	rows, err := p.db.Query(context.Background(), "SELECT wallet_id FROM wallets ORDER BY id")
+	if err != nil {
+		return nil
 	}
+
+	defer rows.Close()
+
+	result := make([]Wallet, 0)
+	for rows.Next() {
+		var wallet Wallet
+		if err := rows.Scan(&wallet.ID); err != nil {
+			return nil
+		}
+		result = append(result, wallet)
+	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
+
+	println("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", result)
 	return result
 }
 
-func (p *Projector) OnWalletOpened(_ context.Context, e *events.WalletOpened) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.wallets[e.WalletID.String()] = &Wallet{
-		ID:     e.WalletID.String(),
-		Amount: e.Amount,
+func (p *Projector) OnWalletOpened(ctx context.Context, e *events.WalletOpened) error {
+	if _, err := p.db.Exec(ctx, "INSERT INTO wallets (wallet_id) VALUES ($1) ON CONFLICT (wallet_id) DO NOTHING", e.WalletID.String()); err != nil {
+		return err
 	}
+
 	return nil
 }
 
