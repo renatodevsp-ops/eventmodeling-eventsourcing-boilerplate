@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/renatodevsp-ops/iron-ledger/wallet-management/events"
+	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/events"
 	"github.com/terraskye/eventsourcing"
 )
 
@@ -35,6 +35,7 @@ func evolve(state walletState, envelope *eventsourcing.Envelope) walletState {
 }
 
 func decide(state walletState, cmd FreezeWallet) ([]eventsourcing.Event, error) {
+
 	if !state.Closed {
 		return nil, fmt.Errorf("wallet %s is not closed", cmd.WalletID)
 	}

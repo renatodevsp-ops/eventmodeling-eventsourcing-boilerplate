@@ -3,36 +3,48 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/renatodevsp-ops/iron-ledger/wallet-management/slices/closemonthwallet"
-	"github.com/renatodevsp-ops/iron-ledger/wallet-management/slices/listwallets"
-	"github.com/renatodevsp-ops/iron-ledger/wallet-management/slices/walletfreezing"
-	"github.com/renatodevsp-ops/iron-ledger/wallet-management/slices/walletopening"
-	membus "github.com/terraskye/eventsourcing/eventbus/memory"
-	memstore "github.com/terraskye/eventsourcing/eventstore/memory"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
+	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/events"
+	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/slices/closemonthwallet"
+	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/slices/listwallets"
+	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/slices/walletfreezing"
+	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/slices/walletopening"
+	"github.com/terraskye/eventsourcing"
+	bus "github.com/terraskye/eventsourcing/eventbus/postgres"
+	store "github.com/terraskye/eventsourcing/eventstore/postgres"
 )
 
 func main() {
-	store := memstore.NewMemoryStore(100)
-	defer store.Close()
+	ctx := context.Background()
 
-	bus := membus.NewEventBus(100)
-	defer bus.Close()
+	_ = godotenv.Load()
 
-	projector := listwallets.NewProjector()
-	if err := bus.Subscribe(context.Background(), "wallet-list-projector", projector.EventHandlers()); err != nil {
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
 		log.Fatal(err)
 	}
-	go func() {
-		for env := range store.Events() {
-			bus.Dispatch(env)
-		}
-	}()
 
-	openWalletHTTP := walletopening.NewHTTPHandler(walletopening.NewHandler(store))
-	closeMonthWalletHTTP := closemonthwallet.NewHTTPHandler(closemonthwallet.NewHandler(store))
+	eventStore := store.NewEventStore(pool)
+	defer eventStore.Close()
+	eventsourcing.RegisterEvent(&events.WalletOpened{})
+	eventsourcing.RegisterEvent(&events.WalletMonthClosed{})
+	eventsourcing.RegisterEvent(&events.WalletFrozen{})
+
+	eventBus := bus.NewEventBus(pool, 3*time.Second)
+	defer eventBus.Close()
+
+	projector := listwallets.NewProjector()
+	if err := eventBus.Subscribe(ctx, "wallet-list-projector", projector.EventHandlers()); err != nil {
+		log.Fatal(err)
+	}
+
+	openWalletHTTP := walletopening.NewHTTPHandler(walletopening.NewHandler(eventStore))
+	closeMonthWalletHTTP := closemonthwallet.NewHTTPHandler(closemonthwallet.NewHandler(eventStore))
 	listWalletsHTTP := listwallets.NewHTTPHandler(listwallets.NewQueryHandler(projector))
 
 	r := gin.Default()
@@ -41,10 +53,12 @@ func main() {
 	closeMonthWalletHTTP.RegisterRoutes(wallets)
 	listWalletsHTTP.RegisterRoutes(wallets)
 
-	freezeWalletHandler := walletfreezing.NewHandler(store)
+	freezeWalletHandler := walletfreezing.NewHandler(eventStore)
 	freezeWalletProcessor := walletfreezing.NewProcessor(freezeWalletHandler, 5*time.Second)
 
-	bus.Subscribe(context.Background(), "freeze-wallet-processor", freezeWalletProcessor.EventHandlers())
+	if err := eventBus.Subscribe(ctx, "freeze-wallet-processor", freezeWalletProcessor.EventHandlers()); err != nil {
+		log.Fatal(err)
+	}
 
 	log.Fatal(r.Run(":8080"))
 }

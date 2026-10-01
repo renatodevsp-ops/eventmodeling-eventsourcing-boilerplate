@@ -1,0 +1,18 @@
+# dependencies
+
+# build output
+dist/
+bin/
+*.exe
+
+# environment and secrets
+.env
+.env.*
+
+# logs
+*.log
+
+# OS / editor files
+.DS_Store
+.idea/
+.vscode/

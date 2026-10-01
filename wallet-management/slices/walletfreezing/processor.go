@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/renatodevsp-ops/iron-ledger/wallet-management/events"
+	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/events"
 	"github.com/terraskye/eventsourcing"
 )
 
@@ -19,6 +19,7 @@ func NewProcessor(handler eventsourcing.CommandHandler[FreezeWallet], delay time
 }
 
 func (p *Processor) OnWalletMonthClosed(ctx context.Context, e *events.WalletMonthClosed) error {
+	log.Printf("OnWalletMonthClosed triggered for wallet %s", e.WalletID)
 	go func() {
 
 		select {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/renatodevsp-ops/iron-ledger/wallet-management/events"
+	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/events"
 	"github.com/terraskye/eventsourcing"
 )
 
