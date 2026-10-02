@@ -4,13 +4,14 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/terraskye/eventsourcing"
 )
 
 type HTTPHandler struct {
-	queryHandler *QueryHandler
+	queryHandler eventsourcing.QueryHandler[ListWallets, []Wallet]
 }
 
-func NewHTTPHandler(qh *QueryHandler) *HTTPHandler {
+func NewHTTPHandler(qh eventsourcing.QueryHandler[ListWallets, []Wallet]) *HTTPHandler {
 	return &HTTPHandler{queryHandler: qh}
 }
 

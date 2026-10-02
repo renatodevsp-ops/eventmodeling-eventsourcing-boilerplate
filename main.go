@@ -17,6 +17,14 @@ import (
 	"github.com/terraskye/eventsourcing"
 	bus "github.com/terraskye/eventsourcing/eventbus/postgres"
 	store "github.com/terraskye/eventsourcing/eventstore/postgres"
+	"github.com/terraskye/eventsourcing/otel"
+	otelglobal "go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 )
 
 func main() {
@@ -24,13 +32,30 @@ func main() {
 
 	_ = godotenv.Load()
 
+	tp, err := initTracer()
+	if err != nil {
+		log.Fatal(err)
+	}
+	otelglobal.SetTracerProvider(tp)
+	otelglobal.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+	defer func() {
+		if err := tp.Shutdown(ctx); err != nil {
+			log.Printf("Error shutting down tracer provider: %v", err)
+		}
+	}()
+
 	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	eventStore := store.NewEventStore(pool)
+	tracedEventStore := otel.WithEventStoreTelemetry(eventStore, otel.WithOperation("EventStore"))
 	defer eventStore.Close()
+
 	eventsourcing.RegisterEvent(&events.WalletOpened{})
 	eventsourcing.RegisterEvent(&events.WalletMonthClosed{})
 	eventsourcing.RegisterEvent(&events.WalletFrozen{})
@@ -39,13 +64,23 @@ func main() {
 	defer eventBus.Close()
 
 	projector := listwallets.NewProjector(pool)
-	if err := eventBus.Subscribe(ctx, "wallet-list-projector", projector.EventHandlers()); err != nil {
+
+	tracedProjectorHandlers := otel.WithEventTelemetry(projector.EventHandlers(), otel.WithOperation("WalletListProjector"))
+	if err := eventBus.Subscribe(ctx, "wallet-list-projector", tracedProjectorHandlers); err != nil {
 		log.Fatal(err)
 	}
 
-	openWalletHTTP := walletopening.NewHTTPHandler(walletopening.NewHandler(eventStore))
-	closeMonthWalletHTTP := closemonthwallet.NewHTTPHandler(closemonthwallet.NewHandler(eventStore))
-	listWalletsHTTP := listwallets.NewHTTPHandler(listwallets.NewQueryHandler(projector))
+	openWalletHandler := walletopening.NewHandler(tracedEventStore)
+	tracedOpenWalletHandler := otel.WithCommandTelemetry(openWalletHandler, otel.WithOperation("OpenWallet"))
+	openWalletHTTP := walletopening.NewHTTPHandler(tracedOpenWalletHandler)
+
+	closeMonthWalletHandler := closemonthwallet.NewHandler(tracedEventStore)
+	tracedCloseMonthWalletHandler := otel.WithCommandTelemetry(closeMonthWalletHandler, otel.WithOperation("CloseMonthWallet"))
+	closeMonthWalletHTTP := closemonthwallet.NewHTTPHandler(tracedCloseMonthWalletHandler)
+
+	listWalletsQueryHandler := listwallets.NewQueryHandler(projector)
+	tracedListWalletsQueryHandler := otel.WithQueryTelemetry(listWalletsQueryHandler, otel.WithOperation("ListWallets"))
+	listWalletsHTTP := listwallets.NewHTTPHandler(tracedListWalletsQueryHandler)
 
 	r := gin.Default()
 	wallets := r.Group("/api/v1/wallets")
@@ -53,12 +88,54 @@ func main() {
 	closeMonthWalletHTTP.RegisterRoutes(wallets)
 	listWalletsHTTP.RegisterRoutes(wallets)
 
-	freezeWalletHandler := walletfreezing.NewHandler(eventStore)
-	freezeWalletProcessor := walletfreezing.NewProcessor(freezeWalletHandler, 5*time.Second)
+	freezeWalletHandler := walletfreezing.NewHandler(tracedEventStore)
+	tracedFreezeWalletHandler := otel.WithCommandTelemetry(freezeWalletHandler, otel.WithOperation("FreezeWallet"))
+	freezeWalletProcessor := walletfreezing.NewProcessor(tracedFreezeWalletHandler, 5*time.Second)
 
-	if err := eventBus.Subscribe(ctx, "freeze-wallet-processor", freezeWalletProcessor.EventHandlers()); err != nil {
+	tracedProcessorHandlers := otel.WithEventTelemetry(freezeWalletProcessor.EventHandlers(), otel.WithOperation("FreezeWalletProcessor"))
+	if err := eventBus.Subscribe(ctx, "freeze-wallet-processor", tracedProcessorHandlers); err != nil {
 		log.Fatal(err)
 	}
 
 	log.Fatal(r.Run(":8080"))
+}
+
+func initTracer() (*sdktrace.TracerProvider, error) {
+	var exporter sdktrace.SpanExporter
+	var err error
+
+	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otelEndpoint != "" {
+		ctx := context.Background()
+		exporter, err = otlptracegrpc.New(ctx,
+			otlptracegrpc.WithEndpoint(otelEndpoint),
+			otlptracegrpc.WithInsecure(),
+		)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("Using OTLP exporter with endpoint: %s", otelEndpoint)
+	} else {
+		exporter, err = stdouttrace.New(stdouttrace.WithPrettyPrint())
+		if err != nil {
+			return nil, err
+		}
+		log.Println("Using stdout exporter (pretty print)")
+	}
+
+	res, err := resource.New(context.Background(),
+		resource.WithAttributes(
+			semconv.ServiceName("wallet-management"),
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
+	)
+
+	return tp, nil
 }

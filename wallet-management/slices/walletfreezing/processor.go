@@ -19,7 +19,7 @@ func NewProcessor(handler eventsourcing.CommandHandler[FreezeWallet], delay time
 }
 
 func (p *Processor) OnWalletMonthClosed(ctx context.Context, e *events.WalletMonthClosed) error {
-	log.Printf("OnWalletMonthClosed triggered for wallet %s", e.WalletID)
+
 	go func() {
 
 		select {
