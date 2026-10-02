@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/google/uuid"
 	"github.com/renatodevsp-ops/eventmodeling-eventsourcing-boilerplate/wallet-management/events"
 	"github.com/terraskye/eventsourcing"
@@ -58,5 +59,12 @@ func decide(state walletState, cmd CloseMonthWallet) ([]eventsourcing.Event, err
 }
 
 func NewHandler(store eventsourcing.EventStore) eventsourcing.CommandHandler[CloseMonthWallet] {
-	return eventsourcing.NewCommandHandler(store, initialState, evolve, decide)
+	return eventsourcing.NewCommandHandler(store,
+		initialState,
+		evolve,
+		decide,
+		eventsourcing.WithStreamState(eventsourcing.StreamExists{}),
+		eventsourcing.WithRetryStrategy(
+			backoff.WithMaxRetries(backoff.NewExponentialBackOff(), 3),
+		))
 }
