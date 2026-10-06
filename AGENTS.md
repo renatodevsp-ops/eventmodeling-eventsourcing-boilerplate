@@ -1,6 +1,7 @@
 ---
 globs: ["**/slices/**/*.go", "**/events/**/*.go"]
 ---
-Para criar slices, siga as convenções em:
-- .claude/skills/state-change-slice.md
-- .claude/skills/state-view-slice.md
+To create slices, follow the conventions in:
+- .opencode/skills/state-change.md
+- .opencode/skills/state-view.md
+- .opencode/skills/processor.md

@@ -3,8 +3,8 @@
   "permission": {
     "edit": {
       "*": "allow",
-      ".opencode/skills/**": "deny",
-      "**/.opencode/skills/**": "deny"
+      ".opencode/skills/**": "allow",
+      "**/.opencode/skills/**": "allow"
     }
   }
 }
